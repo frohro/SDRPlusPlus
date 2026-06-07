@@ -388,8 +388,9 @@ private:
         if (parts[0] == "F" || parts[0] == "\\set_freq") {
             std::lock_guard lck(vfoMtx);
 
-            // if number of arguments isn't correct, return error
-            if (parts.size() != 2) {
+            // Handle optional VFO argument
+            int freqPartIdx = (parts.size() == 3) ? 2 : 1;
+            if (parts.size() != 2 && parts.size() != 3) {
                 resp = "RPRT 1\n";
                 client->write(resp.size(), (uint8_t*)resp.c_str());
                 return;
@@ -403,7 +404,7 @@ private:
             }
 
             // Parse frequency and assign it to the VFO
-            long long freq = std::stoll(parts[1]);
+            long long freq = std::stoll(parts[freqPartIdx]);
             tuner::tune(tuner::TUNER_MODE_NORMAL, selectedVfo, freq);
             resp = "RPRT 0\n";
             client->write(resp.size(), (uint8_t*)resp.c_str());
@@ -419,7 +420,7 @@ private:
                 freq += sigpath::vfoManager.getOffset(selectedVfo);
             }
 
-            // Respond with the frequency
+            // Respond with the frequency (ignore optional VFO argument)
             char buf[128];
             sprintf(buf, "%" PRIu64 "\n", (uint64_t)freq);
             client->write(strlen(buf), (uint8_t*)buf);
@@ -435,8 +436,9 @@ private:
                 return;
             }
 
-            // if number of arguments isn't correct, return error
-            if (parts.size() != 3) {
+            // Handle optional VFO argument
+            int modePartIdx = (parts.size() == 4) ? 2 : 1;
+            if (parts.size() != 3 && parts.size() != 4) {
                 resp = "RPRT 1\n";
                 client->write(resp.size(), (uint8_t*)resp.c_str());
                 return;
@@ -444,7 +446,7 @@ private:
 
             // Check that the bandwidth is an integer (0 or -1 for default bandwidth)
             int pos = 0;
-            for (char c : parts[2]) {
+            for (char c : parts[modePartIdx + 1]) {
                 if (!std::isdigit(c) && !(c == '-' && !pos)) {
                     resp = "RPRT 1\n";
                     client->write(resp.size(), (uint8_t*)resp.c_str());
@@ -453,8 +455,8 @@ private:
                 pos++;
             }
 
-            const std::string& newModeStr = parts[1];
-            float newBandwidth = std::atoi(parts[2].c_str());
+            const std::string& newModeStr = parts[modePartIdx];
+            float newBandwidth = std::atoi(parts[modePartIdx + 1].c_str());
             
             auto it = std::find_if(radioModeToString.begin(), radioModeToString.end(), [&newModeStr](const auto& e) {
                 return e.second == newModeStr;
@@ -478,18 +480,20 @@ private:
         }
         else if (parts[0] == "m" || parts[0] == "\\get_mode") {
             std::lock_guard lck(vfoMtx);
-            resp = "RAW\n";
-
+            // Always return exactly two lines to avoid netrigctl desync
             if (!selectedVfo.empty() && core::modComManager.getModuleName(selectedVfo) == "radio") {
-                int mode;
+                int mode = RADIO_IFACE_MODE_USB;
                 core::modComManager.callInterface(selectedVfo, RADIO_IFACE_CMD_GET_MODE, NULL, &mode);
+                float bw = sigpath::vfoManager.getBandwidth(selectedVfo);
                 resp = std::string(radioModeToString[mode]) + "\n";
+                resp += std::to_string((int)bw) + "\n";  // 2nd line: bandwidth
             }
             else if (!selectedVfo.empty()) {
+                resp = "RAW\n";
                 resp += std::to_string((int)sigpath::vfoManager.getBandwidth(selectedVfo)) + "\n";
             }
             else {
-                resp += "0\n";
+                resp = "RAW\n0\n";
             }
 
             client->write(resp.size(), (uint8_t*)resp.c_str());
@@ -498,7 +502,6 @@ private:
             std::lock_guard lck(vfoMtx);
             resp = "RPRT 0\n";
 
-            // if number of arguments isn't correct or the VFO is not "VFO", return error
             if (parts.size() != 2) {
                 resp = "RPRT 1\n";
                 client->write(resp.size(), (uint8_t*)resp.c_str());
@@ -506,9 +509,9 @@ private:
             }
 
             if (parts[1] == "?") {
-                resp = "VFO\n";
+                resp = "VFOA VFOB\n";
             }
-            else if (parts[1] != "VFO") {
+            else if (parts[1] != "VFO" && parts[1] != "VFOA" && parts[1] != "VFOB") {
                 resp = "RPRT 1\n";
             }
 
@@ -516,12 +519,12 @@ private:
         }
         else if (parts[0] == "v" || parts[0] == "\\get_vfo") {
             std::lock_guard lck(vfoMtx);
-            resp = "VFO\n";
+            resp = "VFOA\n";
             client->write(resp.size(), (uint8_t*)resp.c_str());
         }
         else if (parts[0] == "\\chk_vfo") {
             std::lock_guard lck(vfoMtx);
-            resp = "CHKVFO 0\n";
+            resp = "CHKVFO 1\n";
             client->write(resp.size(), (uint8_t*)resp.c_str());
         }
         else if (parts[0] == "s") {
@@ -659,7 +662,7 @@ private:
                 "0\n" /* RIG_PARM_NONE */;
             client->write(resp.size(), (uint8_t*)resp.c_str());
         }
-        // This get_powerstat stuff is a wordaround for WSJT-X 2.7.0
+        // This get_powerstat stuff is a workaround for WSJT-X 2.7.0
         else if (parts[0] == "\\get_powerstat") {
             resp = "1\n";
             client->write(resp.size(), (uint8_t*)resp.c_str());
